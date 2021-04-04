@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -67,34 +68,97 @@ func UnpackPlumbMsg(jsonMsg []byte) {
 	if err != nil {
 		log.Println(err)
 	}
+	err = ParseRules("/mnt/plumb/rules", &msg)
+	if err != nil {
+		log.Println(err)
+	}
 }
 
 func ParseRules(rulesFile string, msg *PlumbMsg) error {
 	var pattern RulesPattern
 
-	rulesFd, err := os.OpenFile(rulesFile, os.O_RDONLY)
+	rulesFd, err := os.Open(rulesFile)
 	if err != nil {
 		log.Println(err)
 	}
 	scanner := bufio.NewScanner(rulesFd)
-	while scanner.Scan() {
+	for i := 0; scanner.Scan(); i++ {
 		if scanner.Err() != nil {
 			return errors.New("could not read rules")
 		}
-		// Parse line
-		obj :=
-		line := scanner.Text()
-		object := line[:strings.Index(line, " ")]
-		switch line[:sep] {
-		case "type":
+		line := string(scanner.Text())
+		
+		// Skip blank lines
+		if line == "\n" {
+			continue
+		} else {
+			// Ignore commented lines and lines full of spaces and tabs		
+			ignore := true
+			for j := 0; j < len(line); j++ {
+				if line[j] == ' ' {
+					continue
+				}
+				if line[j] == '#' {
+					break
+				} else if line[j] != ' ' && line[j] != '\t' {
+					ignore = false
+					line = line[j:]
+					break
+				}
+			}
+			if ignore {
+				// finaly skip the line
+				continue
+			}
 
-		case "data":
-		case "arg":
-		case "plumb"
-		case "dst":
-		case "src":
-		case "wdir":
-		case "attr":
 		}
+		
+		// Parse line
+		sep := strings.Index(line, " ")
+		if sep == -1 {
+			errmsg := fmt.Sprintf("inconsistent rule pattern: line %d", i)
+			return errors.New(errmsg)
+		}
+		pattern.Obj = line[:sep]
+		line = line[sep + 1:]
+		sep = strings.Index(line, " ")
+		if sep == -1 {
+			errmsg := fmt.Sprintf("inconsistent rule pattern: line %d", i)
+			return errors.New(errmsg)
+		}
+		pattern.Verb = line[:sep]
+		pattern.Arg = line[sep + 1:]
+		
+		fmt.Println(pattern.Obj)
+		fmt.Println(pattern.Verb)
+		fmt.Println(pattern.Arg)
 	}
+	return nil
 }
+
+
+
+
+
+		// Parse the line
+//		obj :
+//		
+//		
+//		
+//		
+//		
+//		line := scanner.Text()
+//		object := line[:strings.Index(line, " ")]
+//		switch line[:sep] {
+//		case "type":
+//
+//		case "data":
+//		case "arg":
+//		case "plumb"
+//		case "dst":
+//		case "src":
+//		case "wdir":
+//		case "attr":
+//		}
+//	}
+//}
