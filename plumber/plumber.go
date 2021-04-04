@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -76,6 +77,7 @@ func UnpackPlumbMsg(jsonMsg []byte) {
 
 func ParseRules(rulesFile string, msg *PlumbMsg) error {
 	var pattern RulesPattern
+	var matchRules = true
 
 	rulesFd, err := os.Open(rulesFile)
 	if err != nil {
@@ -115,6 +117,12 @@ func ParseRules(rulesFile string, msg *PlumbMsg) error {
 		
 		// Parse line
 		sep := strings.Index(line, " ")
+		
+		
+		
+		
+		
+		
 		if sep == -1 {
 			errmsg := fmt.Sprintf("inconsistent rule pattern: line %d", i)
 			return errors.New(errmsg)
@@ -128,37 +136,32 @@ func ParseRules(rulesFile string, msg *PlumbMsg) error {
 		}
 		pattern.Verb = line[:sep]
 		pattern.Arg = line[sep + 1:]
-		
-		fmt.Println(pattern.Obj)
-		fmt.Println(pattern.Verb)
-		fmt.Println(pattern.Arg)
+		switch pattern.Obj {
+		case "type":
+			if pattern.Verb == "is" {
+				if pattern.Arg != msg.Type {
+					matchRules = false
+				}
+			} else if pattern.Verb == "isn't" {
+				if pattern.Arg == msg.Type {
+					matchRules = false
+				}
+			} else {
+				errmsg := fmt.Sprintf("unknow verb, line %d: %s", i, pattern.Verb)
+				return errors.New(errmsg)
+			}
+		case "data":
+			if pattern.Verb == "set" {
+				// check for valid variable name (i.e. shell var syntax)
+				if pattern.Arg[0]
+			}
+		case "arg":
+		case "plumb"
+		case "dst":
+		case "src":
+		case "wdir":
+		case "attr":
+		}
 	}
 	return nil
 }
-
-
-
-
-
-		// Parse the line
-//		obj :
-//		
-//		
-//		
-//		
-//		
-//		line := scanner.Text()
-//		object := line[:strings.Index(line, " ")]
-//		switch line[:sep] {
-//		case "type":
-//
-//		case "data":
-//		case "arg":
-//		case "plumb"
-//		case "dst":
-//		case "src":
-//		case "wdir":
-//		case "attr":
-//		}
-//	}
-//}
