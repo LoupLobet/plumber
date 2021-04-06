@@ -153,7 +153,7 @@ func EvalPattern(pattern *RulePattern, msg *PlumbMsg, variables *map[string]stri
 		if (*pattern).Verb == "set" {
 			(*variables)["$data"] = (*msg).Data
 		} else if (*pattern).Verb == "matches" {
-			re := GetRegexp((*pattern).Arg, variables)
+			re := BuildRegexp((*pattern).Arg, variables)
 			patternValue = re.MatchString((*msg).Data)
 		} else {
 			err = errors.New(fmt.Sprintf("unknow verb: %s", (*pattern).Verb))
@@ -251,7 +251,7 @@ func IsPattern(line string) (string, bool) {
 	return line, true
 }
 
-func GetRegexp(str string, variables *map[string]string) (*regexp.Regexp) {
+func BuilRegexp(str string, variables *map[string]string) (*regexp.Regexp) {
 	var restr string
 	var quoted bool
 
