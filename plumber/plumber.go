@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+//	"strconv"
 	"strings"
 	"time"
 )
@@ -19,7 +20,7 @@ type Attribute struct {
 	Value string
 }
 
-type RulesPattern struct {
+type RulePattern struct {
 	Obj  string
 	Verb string
 	Arg  string
@@ -69,99 +70,215 @@ func UnpackPlumbMsg(jsonMsg []byte) {
 	if err != nil {
 		log.Println(err)
 	}
-	err = ParseRules("/mnt/plumb/rules", &msg)
-	if err != nil {
-		log.Println(err)
-	}
+	ParseRules("/mnt/plumb/rules", &msg)
+	fmt.Println("----------------")
 }
 
-func ParseRules(rulesFile string, msg *PlumbMsg) error {
-	var pattern RulesPattern
-	var matchRules = true
+func ParseRules(rulesFile string, msg *PlumbMsg) {
+	var rule []string
+	var capturing bool
 
 	rulesFd, err := os.Open(rulesFile)
 	if err != nil {
 		log.Println(err)
 	}
 	scanner := bufio.NewScanner(rulesFd)
-	for i := 0; scanner.Scan(); i++ {
-		if scanner.Err() != nil {
-			return errors.New("could not read rules")
-		}
-		line := string(scanner.Text())
-		
-		// Skip blank lines
-		if line == "\n" {
-			continue
-		} else {
-			// Ignore commented lines and lines full of spaces and tabs		
-			ignore := true
-			for j := 0; j < len(line); j++ {
-				if line[j] == ' ' {
-					continue
-				}
-				if line[j] == '#' {
-					break
-				} else if line[j] != ' ' && line[j] != '\t' {
-					ignore = false
-					line = line[j:]
-					break
-				}
-			}
-			if ignore {
-				// finaly skip the line
-				continue
-			}
 
+	for scanner.Scan() {
+		if scanner.Err() != nil {
+			log.Println("could not read rules")
+			return
 		}
-		
-		// Parse line
-		sep := strings.Index(line, " ")
-		
-		
-		
-		
-		
-		
-		if sep == -1 {
-			errmsg := fmt.Sprintf("inconsistent rule pattern: line %d", i)
-			return errors.New(errmsg)
-		}
-		pattern.Obj = line[:sep]
-		line = line[sep + 1:]
-		sep = strings.Index(line, " ")
-		if sep == -1 {
-			errmsg := fmt.Sprintf("inconsistent rule pattern: line %d", i)
-			return errors.New(errmsg)
-		}
-		pattern.Verb = line[:sep]
-		pattern.Arg = line[sep + 1:]
-		switch pattern.Obj {
-		case "type":
-			if pattern.Verb == "is" {
-				if pattern.Arg != msg.Type {
-					matchRules = false
-				}
-			} else if pattern.Verb == "isn't" {
-				if pattern.Arg == msg.Type {
-					matchRules = false
-				}
-			} else {
-				errmsg := fmt.Sprintf("unknow verb, line %d: %s", i, pattern.Verb)
-				return errors.New(errmsg)
+
+		line, isPattern := IsPattern(scanner.Text())
+		if isPattern {
+			// capture patterns to make a rule
+			rule = append(rule, line)
+			capturing = true
+		} else if capturing == true {
+
+			// end of capture proceed to parsing
+			variables := make(map[string]string)
+
+			ruleValue, err := EvalRule(&rule, msg, &variables)
+			if err != nil {
+				log.Println(err)
 			}
-		case "data":
-			if pattern.Verb == "set" {
-				// check for valid variable name (i.e. shell var syntax)
-				if pattern.Arg[0]
-			}
-		case "arg":
-		case "plumb"
-		case "dst":
-		case "src":
-		case "wdir":
-		case "attr":
+			fmt.Println(scanner.Text())
+			fmt.Println("Rule Value:", ruleValue)
+
+			rule = nil
+			capturing = false
 		}
 	}
-	return nil
+}
+
+func EvalRule(rule *[]string, msg *PlumbMsg, variables *map[string]string) (bool, error) {
+	var pattern RulePattern
+	var err error
+	var ruleValue = true
+	var patternValue bool
+
+	for _, line := range(*rule) {
+		err = CookPattern(line, &pattern)
+		if err != nil {
+			return false, err
+		}
+		patternValue, err = EvalPattern(&pattern, msg, variables)
+		if err != nil {
+			return false, err
+		}
+		ruleValue = ruleValue && patternValue
+	}
+
+	return ruleValue, err
+}
+
+func EvalPattern(pattern *RulePattern, msg *PlumbMsg, variables *map[string]string) (bool, error) {
+	var patternValue = true
+	var err error
+
+	switch (*pattern).Obj {
+	case "type":
+		if (*pattern).Verb == "is" {
+			patternValue = ((*pattern).Arg == msg.Type)
+		} else if (*pattern).Verb == "isn't" {
+			patternValue = ((*pattern).Arg != msg.Type)
+		} else {
+			err = errors.New(fmt.Sprintf("unknow verb: %s", (*pattern).Verb))
+		}
+		return patternValue, err
+
+	case "data":
+		if (*pattern).Verb == "set" {
+			(*variables)["$data"] = (*msg).Data
+		} else if (*pattern).Verb == "matches" {
+			re := GetRegexp((*pattern).Arg, variables)
+			patternValue = re.MatchString((*msg).Data)
+		} else {
+			err = errors.New(fmt.Sprintf("unknow verb: %s", (*pattern).Verb))
+		}
+		return patternValue, err
+
+//	case "arg":
+//		if (*pattern).Verb == "isfile" {
+//			// Check for a valid arg variable name (i.e. '\$[0-9]')
+//			if (*pattern).Arg[0] != '$' {
+//				err = errors.New(fmt.Sprintf("invalid arg variable: %s", (*pattern).Arg))
+//			} else {
+//				argIndex, err := strconv.Atoi((*pattern).Arg[1:])
+//				// split msg.Data into an argument array
+//
+//			}
+//
+//		} else {
+//			err = errors.New(fmt.Sprintf("unknow verb: %s", (*pattern).Verb))
+//		}
+//		return patternValue, err
+	}
+	// temp return (compiler)
+	return true, nil
+}
+
+
+
+func CookPattern(line string, pattern *RulePattern) error {
+	var bufPattern RulePattern
+	var i int
+	var reterr error
+
+	// Leading and trailing whitspaces and tabs have
+	// already been removed by IsPattern().
+
+	// Object
+	for i = 0; i < len(line) && line[i] != ' ' && line[i] != '\t'; i++ {
+		bufPattern.Obj += string(line[i])
+	}
+	for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+		i++
+	}
+	// Verb
+	for ; i < len(line) && line[i] != ' ' && line[i] != '\t'; i++ {
+		bufPattern.Verb += string(line[i])
+	}
+	for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+		i++
+	}
+	// Argument
+	for ; i < len(line) && line[i] != ' ' && line[i] != '\t'; i++ {
+		bufPattern.Arg += string(line[i])
+	}
+
+	if bufPattern.Obj == " " || bufPattern.Arg == " " || bufPattern.Arg == " " {
+		reterr = errors.New("inconsitent rule pattern")
+	}
+
+	*pattern = bufPattern
+	return reterr
+}
+
+func IsPattern(line string) (string, bool) {
+
+	if line == "\n" {
+		return "", false
+	}
+	// Ignore comments and format lines (i.e. line onlycomposed
+	// of tabs and spaces). If the line is not skipped,
+	// it is return without leading and trailing whitespaces.
+	ignore := true
+	for i := 0; i < len(line); i++ {
+		if line[i] == ' ' {
+			continue
+		}
+		if line[i] == '#' {
+			break
+		} else if line[i] != ' ' && line[i] != '\t' {
+			ignore = false
+			// remove leading
+			line = line[i:]
+			break
+		}
+	}
+	if ignore {
+		return line, false
+	}
+	// remove trailing
+	for i := len(line) - 1; i > -1; i-- {
+		if line[i] != ' ' && line[i] != '\t' {
+			break
+		}
+	}
+	return line, true
+}
+
+func GetRegexp(str string, variables *map[string]string) (*regexp.Regexp) {
+	var restr string
+	var quoted bool
+
+	// combine regex + raw text (e.g. '([a-zA-z]').png)
+	for i := 0; i < len(str); i++ {
+		if (i == 0 && str[i] == '\'') ||
+		   (str[i] == '\'' && str[i - 1] != '\\') {
+			quoted = !quoted
+		} else {
+			// eval variable
+			if !quoted && str[i] == '$' {
+				endOfVar := strings.Index(str[i:], " ")
+				if endOfVar == -1 {
+					endOfVar = len(str)
+				}
+				varName := str[i:endOfVar]
+				varValue, exists := (*variables)[varName]
+				if exists {
+					restr += varValue
+				}
+				// Remove the variable in the raw text.
+				// If the vriable doesn't exist, replace it by nothing.
+				i = endOfVar - 1
+			} else {
+				restr += string(str[i])
+			}
+		}
+	}
+	return regexp.MustCompile(restr)
 }
