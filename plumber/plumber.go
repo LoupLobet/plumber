@@ -104,9 +104,7 @@ func ParseRules(rulesFile string, msg *PlumbMsg) {
 			if err != nil {
 				log.Println(err)
 			}
-			fmt.Println(scanner.Text())
-			fmt.Println("Rule Value:", ruleValue)
-
+			fmt.Println(ruleValue)
 			rule = nil
 			capturing = false
 		}
@@ -150,11 +148,22 @@ func EvalPattern(pattern *RulePattern, msg *PlumbMsg, variables *map[string]stri
 		return patternValue, err
 
 	case "data":
+		fmt.Println(CookArg((*pattern).Arg, variables))
 		if (*pattern).Verb == "set" {
-			(*variables)["$data"] = (*msg).Data
+			(*variables)["data"] = (*msg).Data
 		} else if (*pattern).Verb == "matches" {
 			re := BuildRegexp((*pattern).Arg, variables)
 			patternValue = re.MatchString((*msg).Data)
+		} else {
+			err = errors.New(fmt.Sprintf("unknow verb: %s", (*pattern).Verb))
+		}
+		return patternValue, err
+
+	case "dst":
+		if (*pattern).Verb == "is" {
+			patternValue = ((*pattern).Arg == msg.Dst)
+		} else if (*pattern).Verb == "isn't" {
+			patternValue = ((*pattern).Arg != msg.Dst)
 		} else {
 			err = errors.New(fmt.Sprintf("unknow verb: %s", (*pattern).Verb))
 		}
@@ -205,10 +214,7 @@ func CookPattern(line string, pattern *RulePattern) error {
 		i++
 	}
 	// Argument
-	for ; i < len(line) && line[i] != ' ' && line[i] != '\t'; i++ {
-		bufPattern.Arg += string(line[i])
-	}
-
+	bufPattern.Arg = line[i:]
 	if bufPattern.Obj == " " || bufPattern.Arg == " " || bufPattern.Arg == " " {
 		reterr = errors.New("inconsitent rule pattern")
 	}
@@ -251,7 +257,7 @@ func IsPattern(line string) (string, bool) {
 	return line, true
 }
 
-func BuilRegexp(str string, variables *map[string]string) (*regexp.Regexp) {
+func BuildRegexp(str string, variables *map[string]string) (*regexp.Regexp) {
 	var restr string
 	var quoted bool
 
@@ -281,4 +287,53 @@ func BuilRegexp(str string, variables *map[string]string) (*regexp.Regexp) {
 		}
 	}
 	return regexp.MustCompile(restr)
+}
+
+func CookArg(arg string, variables *map[string]string) (string, error) {
+	var quoted bool
+	var escaped bool
+
+	reVar := regexp.MustCompile(`^\$([a-zA-Z0-9_]+)`)
+	reBraceVar := regexp.MustCompile(`^\$\{([a-zA-Z0-9_]+)\}`)
+	for i := 0; i < len(arg); i++ {
+		if !quoted && !escaped && arg[i] == '\\' {
+			escaped = true
+			continue
+		}
+		if (i == 0 && arg[i] == '\'') ||
+	       (arg[i] == '\'' && arg[i - 1] != '\\') {
+			quoted = !quoted
+		} else {
+			if !quoted && !escaped && arg[i] == '$' {
+				// eval variable
+				varNames := reVar.FindAllStringSubmatch(arg[i:], -1)
+				braceVarNames := reBraceVar.FindAllStringSubmatch(arg[i:], -1)
+
+				if len(varNames) > 0 {
+					varValue, exists := (*variables)[varNames[0][1]]
+					if !exists {
+						varValue = ""
+					}
+					buf := reVar.ReplaceAllString(arg[i:], varValue)
+					arg = arg[:i] + buf
+				} else if len(braceVarNames) > 0 {
+					varValue, exists := (*variables)[braceVarNames[0][1]]
+					if !exists {
+						varValue = ""
+					}
+					buf := reBraceVar.ReplaceAllString(arg[i:], varValue)
+					arg = arg[:i] + buf
+				} else {
+					errmsg := fmt.Sprintf("invalid variable here: %s", arg[i:])
+					return "", errors.New(errmsg)
+				}
+			}
+		}
+		escaped = false
+	}
+	if quoted {
+		errmsg := fmt.Sprintf("expected ' not newline")
+		return "", errors.New(errmsg)
+	}
+	return arg, nil
 }
