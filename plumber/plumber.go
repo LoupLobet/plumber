@@ -9,10 +9,19 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"regexp"
-//	"strconv"
+	"strconv"
 	"strings"
 	"time"
+)
+
+const (
+	Blank   = iota
+	Comment
+	Macro
+	Pattern
+	Error
 )
 
 type Attribute struct {
@@ -21,31 +30,32 @@ type Attribute struct {
 }
 
 type RulePattern struct {
-	Obj  string
-	Verb string
-	Arg  string
+	Obj     string
+	Verb    string
+	Arg     string
 }
 
 type PlumbMsg struct {
-	Attr   []Attribute
-	Data   string
-	Dst    string
-	Src    string
-	Type   string
-	Wdir   string
+	Attr []Attribute
+	Data string
+	Dst  string
+	Src  string
+	Type string
+	Wdir string
 }
 
+type Vars map[string]string
+type Macros = Vars
 
 const Send = "/mnt/plumb/send"
+const Rules = "/mnt/plumb/rules"
+const Shell = "/bin/sh"
+const ShellOpts = "-c"
 
 func main() {
-	HandleMsg(Send)
-}
-
-func HandleMsg(sendFile string) {
 	var msg bytes.Buffer
 
-	sendFd, err := os.OpenFile(sendFile, os.O_RDONLY, os.ModeNamedPipe)
+	sendFd, err := os.OpenFile(Send, os.O_RDONLY, os.ModeNamedPipe)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -53,287 +63,255 @@ func HandleMsg(sendFile string) {
 	for {
 		_, err := io.Copy(&msg, sendFd)
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err)
+			continue
 		}
 		if msg.Len() > 0 {
-			go UnpackPlumbMsg(msg.Bytes())
+			go ProcessMsg(msg.Bytes())
 			msg.Reset()
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+
 }
 
-func UnpackPlumbMsg(jsonMsg []byte) {
-	var msg PlumbMsg
+func CookPattern(line string, pattern *RulePattern) error {
+	var toknb int
+	var tokRecord bool
 
-	err := json.Unmarshal(jsonMsg, &msg)
-	if err != nil {
-		log.Println(err)
-	}
-	ParseRules("/mnt/plumb/rules", &msg)
-	fmt.Println("----------------")
-}
-
-func ParseRules(rulesFile string, msg *PlumbMsg) {
-	var rule []string
-	var capturing bool
-
-	rulesFd, err := os.Open(rulesFile)
-	if err != nil {
-		log.Println(err)
-	}
-	scanner := bufio.NewScanner(rulesFd)
-
-	for scanner.Scan() {
-		if scanner.Err() != nil {
-			log.Println("could not read rules")
-			return
+	for i := 0; i < len(line); i++ {
+		if line[i] != ' ' && line[i] != '\t' || toknb == 2 && tokRecord  {
+			switch toknb {
+			case 0:
+				(*pattern).Obj += string(line[i])
+			case 1:
+				(*pattern).Verb += string(line[i])
+			case 2:
+				(*pattern).Arg += string(line[i])
+			}
+			tokRecord = true
+		} else if tokRecord && toknb < 2 {
+			toknb++
+			tokRecord = false
 		}
+	}
+	if (*pattern).Arg == "" || (*pattern).Verb == "" || (*pattern).Obj == "" {
+		return errors.New("Inconsistent pattern: " + line)
+	}
+	return nil
+}
 
-		line, isPattern := IsPattern(scanner.Text())
-		if isPattern {
-			// capture patterns to make a rule
-			rule = append(rule, line)
-			capturing = true
-		} else if capturing == true {
+func EvalPattern(pattern RulePattern, msg *PlumbMsg, vars *Vars) (bool, error) {
+	var patternValue bool
+	var err error
 
-			// end of capture proceed to parsing
-			variables := make(map[string]string)
+	pattern.Arg, err = Expand([]byte(pattern.Arg), vars)
+	if err != nil {
+		return false, err
+	}
 
-			ruleValue, err := EvalRule(&rule, msg, &variables)
+	switch pattern.Obj {
+
+	case "arg":  fallthrough
+	case "data": fallthrough
+	case "dst":  fallthrough
+	case "src":  fallthrough
+	case "type": fallthrough
+	case "wdir":
+		if pattern.Verb == "is" {
+			patternValue = (pattern.Arg == (*vars)[pattern.Obj])
+		} else if pattern.Verb == "isn't" {
+			patternValue = (pattern.Arg != (*vars)[pattern.Obj])
+		} else if pattern.Verb == "set" {
+			(*vars)[pattern.Obj] = pattern.Arg
+			patternValue = true
+		} else if pattern.Verb == "matches" {
+			re := regexp.MustCompile(pattern.Arg)
+			patternValue = re.MatchString((*vars)[pattern.Obj])
+			if patternValue {
+				submatch := re.FindStringSubmatch((*vars)[pattern.Obj])
+				// set $0 ... $9
+				for i := 0; i < len(submatch) && i < 10; i++ {
+					(*vars)[strconv.Itoa(i)] = submatch[i]
+				}
+			}
+		} else if pattern.Verb == "isfile" || pattern.Verb == "isdir" {
+		    stat, err := os.Stat(pattern.Arg)
+			if err != nil {
+				log.Println(err)
+				break
+			}
+			mode := stat.Mode()
+			if pattern.Verb == "isfile" && mode.IsRegular() ||
+			   pattern.Verb == "isdir" && mode.IsDir() {
+				patternValue = true
+				(*vars)[pattern.Obj] = pattern.Arg
+			}
+		} else {
+			err = errors.New("Inconsistent verb with object '" +
+			                 pattern.Obj + "': " + pattern.Verb)
+		}
+		return patternValue, err
+
+	case "plumb":
+		if pattern.Verb == "start" {
+			shell, shellExists := (*vars)["SHELL"]
+			shellOpts, shellOptsExists := (*vars)["SHELLOPTS"]
+			if !shellExists || !shellOptsExists {
+				shell = Shell
+				shellOpts = ShellOpts
+			}
+			cmd := exec.Command(shell, shellOpts, pattern.Arg)
+			err := cmd.Start()
+			//time.Sleep(2 * time.Second)
 			if err != nil {
 				log.Println(err)
 			}
-			fmt.Println(ruleValue)
-			rule = nil
-			capturing = false
-		}
-	}
-}
-
-func EvalRule(rule *[]string, msg *PlumbMsg, variables *map[string]string) (bool, error) {
-	var pattern RulePattern
-	var err error
-	var ruleValue = true
-	var patternValue bool
-
-	for _, line := range(*rule) {
-		err = CookPattern(line, &pattern)
-		if err != nil {
-			return false, err
-		}
-		patternValue, err = EvalPattern(&pattern, msg, variables)
-		if err != nil {
-			return false, err
-		}
-		ruleValue = ruleValue && patternValue
-	}
-
-	return ruleValue, err
-}
-
-func EvalPattern(pattern *RulePattern, msg *PlumbMsg, variables *map[string]string) (bool, error) {
-	var patternValue = true
-	var err error
-
-	switch (*pattern).Obj {
-	case "type":
-		if (*pattern).Verb == "is" {
-			patternValue = ((*pattern).Arg == msg.Type)
-		} else if (*pattern).Verb == "isn't" {
-			patternValue = ((*pattern).Arg != msg.Type)
 		} else {
-			err = errors.New(fmt.Sprintf("unknow verb: %s", (*pattern).Verb))
+			err = errors.New("Inconsistent verb with object '" +
+			                 pattern.Obj + "': " + pattern.Verb)
 		}
-		return patternValue, err
-
-	case "data":
-		fmt.Println(CookArg((*pattern).Arg, variables))
-		if (*pattern).Verb == "set" {
-			(*variables)["data"] = (*msg).Data
-		} else if (*pattern).Verb == "matches" {
-			re := BuildRegexp((*pattern).Arg, variables)
-			patternValue = re.MatchString((*msg).Data)
-		} else {
-			err = errors.New(fmt.Sprintf("unknow verb: %s", (*pattern).Verb))
-		}
-		return patternValue, err
-
-	case "dst":
-		if (*pattern).Verb == "is" {
-			patternValue = ((*pattern).Arg == msg.Dst)
-		} else if (*pattern).Verb == "isn't" {
-			patternValue = ((*pattern).Arg != msg.Dst)
-		} else {
-			err = errors.New(fmt.Sprintf("unknow verb: %s", (*pattern).Verb))
-		}
-		return patternValue, err
-
-//	case "arg":
-//		if (*pattern).Verb == "isfile" {
-//			// Check for a valid arg variable name (i.e. '\$[0-9]')
-//			if (*pattern).Arg[0] != '$' {
-//				err = errors.New(fmt.Sprintf("invalid arg variable: %s", (*pattern).Arg))
-//			} else {
-//				argIndex, err := strconv.Atoi((*pattern).Arg[1:])
-//				// split msg.Data into an argument array
-//
-//			}
-//
-//		} else {
-//			err = errors.New(fmt.Sprintf("unknow verb: %s", (*pattern).Verb))
-//		}
-//		return patternValue, err
+		return true, err
 	}
-	// temp return (compiler)
-	return true, nil
+	return false, nil
 }
 
+func LineType(line string) int {
 
-
-func CookPattern(line string, pattern *RulePattern) error {
-	var bufPattern RulePattern
-	var i int
-	var reterr error
-
-	// Leading and trailing whitspaces and tabs have
-	// already been removed by IsPattern().
-
-	// Object
-	for i = 0; i < len(line) && line[i] != ' ' && line[i] != '\t'; i++ {
-		bufPattern.Obj += string(line[i])
+	if line == "\n" || line == "" {
+		return Blank
 	}
-	for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
-		i++
+	if len(line) > 0 && line[0] == '#' {
+		return Comment
 	}
-	// Verb
-	for ; i < len(line) && line[i] != ' ' && line[i] != '\t'; i++ {
-		bufPattern.Verb += string(line[i])
-	}
-	for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
-		i++
-	}
-	// Argument
-	bufPattern.Arg = line[i:]
-	if bufPattern.Obj == " " || bufPattern.Arg == " " || bufPattern.Arg == " " {
-		reterr = errors.New("inconsitent rule pattern")
-	}
-
-	*pattern = bufPattern
-	return reterr
-}
-
-func IsPattern(line string) (string, bool) {
-
-	if line == "\n" {
-		return "", false
-	}
-	// Ignore comments and format lines (i.e. line onlycomposed
-	// of tabs and spaces). If the line is not skipped,
-	// it is return without leading and trailing whitespaces.
-	ignore := true
 	for i := 0; i < len(line); i++ {
-		if line[i] == ' ' {
-			continue
+		if line[i] == ' ' || line[i] == '\t' {
+			return Pattern
 		}
-		if line[i] == '#' {
-			break
-		} else if line[i] != ' ' && line[i] != '\t' {
-			ignore = false
-			// remove leading
-			line = line[i:]
-			break
+		if line[i] == '=' {
+			return Macro
 		}
 	}
-	if ignore {
-		return line, false
-	}
-	// remove trailing
-	for i := len(line) - 1; i > -1; i-- {
-		if line[i] != ' ' && line[i] != '\t' {
-			break
-		}
-	}
-	return line, true
+	return Error
 }
 
-func BuildRegexp(str string, variables *map[string]string) (*regexp.Regexp) {
-	var restr string
-	var quoted bool
+func ProcessMsg(jsonMsg []byte) {
+	//var macros = make(Macros)
+	var rule []RulePattern
+	var capturing bool
+	var ruleError bool
 
-	// combine regex + raw text (e.g. '([a-zA-z]').png)
-	for i := 0; i < len(str); i++ {
-		if (i == 0 && str[i] == '\'') ||
-		   (str[i] == '\'' && str[i - 1] != '\\') {
-			quoted = !quoted
-		} else {
-			// eval variable
-			if !quoted && str[i] == '$' {
-				endOfVar := strings.Index(str[i:], " ")
-				if endOfVar == -1 {
-					endOfVar = len(str)
+	msg, err := UnpackPlumbMsg(jsonMsg)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	var macros = Macros {
+		"data": msg.Data, "dst": msg.Dst, "src": msg.Src,
+		"type": msg.Type, "wdir": msg.Wdir,
+	}
+
+	rulesFd, err := os.Open(Rules)
+	if err != nil {
+		log.Println(err)
+	}
+	defer rulesFd.Close()
+
+	scanner := bufio.NewScanner(rulesFd)
+	for scanner.Scan() {
+		err := scanner.Err()
+		if err != nil {
+			log.Println(err)
+		}
+
+		line := strings.Trim(scanner.Text(), "\t ")
+		switch LineType(line) {
+		case Blank:
+			if capturing && !ruleError && len(rule) > 0 {
+				// end of capture eval the rule
+				// set some the special vars (i.e. $data $dst $src $wdir $type)
+				vars := macros
+
+				ruleValue := true
+				for i := 0; i < len(rule) && ruleValue; i++ {
+					patternValue, err := EvalPattern(rule[i], &msg, &vars)
+
+					if err != nil {
+						log.Println(err)
+						// err != nil => patternValue == false
+					}
+					ruleValue = ruleValue && patternValue
 				}
-				varName := str[i:endOfVar]
-				varValue, exists := (*variables)[varName]
-				if exists {
-					restr += varValue
+				//fmt.Println("vars:", vars)
+				fmt.Println("ruleValue:", ruleValue)
+				fmt.Println("$arg:", vars["arg"])
+				rule = nil
+			}
+			ruleError = false
+		case Comment:
+		case Macro:
+			err := SetMacro(line, &macros)
+			if err != nil {
+				log.Println(err)
+			}
+			// avoid macro definition in a rule
+			ruleError = true
+		case Pattern:
+			if !ruleError {
+				var pattern RulePattern
+				capturing = true
+				err := CookPattern(line, &pattern)
+				if err != nil {
+					ruleError = true
+					log.Println(err)
+					break
 				}
-				// Remove the variable in the raw text.
-				// If the vriable doesn't exist, replace it by nothing.
-				i = endOfVar - 1
+				rule = append(rule, pattern)
+			}
+		case Error:
+			ruleError = true
+		}
+	}
+	fmt.Println("")
+}
+
+func SetMacro(line string, macros *Macros) error {
+	var name string
+	var value string
+
+	for i := 0; i < len(line); i++ {
+		if line[i] == '=' {
+			name = line[:i]
+			if i == 0 {
+				return errors.New("Missing name in macro declaration")
+			}
+			if i == 1 && 0 <= name[0] && name[0] <= 9 {
+				return errors.New("Invalid macro name: " + name)
+			}
+			if i < len(line) - 1 {
+				value = line[i + 1:]
 			} else {
-				restr += string(str[i])
+				return errors.New("Missing value in macro declaration")
 			}
+			break
+		}
+		if !IsAlphaNum(line[i]) {
+			return errors.New("Invalid '" + string(line[i]) +
+			                  "' character in macro name: " + line)
 		}
 	}
-	return regexp.MustCompile(restr)
+	value, err := Expand([]byte(value), macros)
+	if err != nil {
+		return err
+	}
+	(*macros)[name] = value
+	return nil
 }
 
-func CookArg(arg string, variables *map[string]string) (string, error) {
-	var quoted bool
-	var escaped bool
+func UnpackPlumbMsg(jsonMsg []byte) (PlumbMsg, error) {
+	var msg PlumbMsg
 
-	reVar := regexp.MustCompile(`^\$([a-zA-Z0-9_]+)`)
-	reBraceVar := regexp.MustCompile(`^\$\{([a-zA-Z0-9_]+)\}`)
-	for i := 0; i < len(arg); i++ {
-		if !quoted && !escaped && arg[i] == '\\' {
-			escaped = true
-			continue
-		}
-		if (i == 0 && arg[i] == '\'') ||
-	       (arg[i] == '\'' && arg[i - 1] != '\\') {
-			quoted = !quoted
-		} else {
-			if !quoted && !escaped && arg[i] == '$' {
-				// eval variable
-				varNames := reVar.FindAllStringSubmatch(arg[i:], -1)
-				braceVarNames := reBraceVar.FindAllStringSubmatch(arg[i:], -1)
-
-				if len(varNames) > 0 {
-					varValue, exists := (*variables)[varNames[0][1]]
-					if !exists {
-						varValue = ""
-					}
-					buf := reVar.ReplaceAllString(arg[i:], varValue)
-					arg = arg[:i] + buf
-				} else if len(braceVarNames) > 0 {
-					varValue, exists := (*variables)[braceVarNames[0][1]]
-					if !exists {
-						varValue = ""
-					}
-					buf := reBraceVar.ReplaceAllString(arg[i:], varValue)
-					arg = arg[:i] + buf
-				} else {
-					errmsg := fmt.Sprintf("invalid variable here: %s", arg[i:])
-					return "", errors.New(errmsg)
-				}
-			}
-		}
-		escaped = false
-	}
-	if quoted {
-		errmsg := fmt.Sprintf("expected ' not newline")
-		return "", errors.New(errmsg)
-	}
-	return arg, nil
+	err := json.Unmarshal(jsonMsg, &msg)
+	return msg, err
 }
+
