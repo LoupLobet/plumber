@@ -8,7 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-//	"log"
+	"log"
 	"os"
 	"os/exec"
 	"regexp"
@@ -50,7 +50,7 @@ type Variables map[string]string
 const DefaultShell = "/bin/sh"
 const DefaultShellOpts = "-c"
 
-var LogFile   = flag.String("l", "/mnt/plumg/log", "log file")
+var LogFile   = flag.String("l", "/mnt/plumb/log", "log file")
 var PlumbFile = flag.String("p", "/mnt/plumb/send", "plumb file")
 var RulesFile = flag.String("r", "/mnt/plumb/rules", "rules file")
 
@@ -59,15 +59,22 @@ func main() {
 
 	flag.Parse()
 
+	logFd, err := os.OpenFile(*LogFile, os.O_WRONLY | os.O_APPEND, os.ModeAppend)
+	if err != nil {
+		fmt.Printf("Plumber: Can't start: couldn't open the log file: %s\n", *LogFile)
+	}
+	defer logFd.Close()
+	log.SetOutput(logFd)
+
 	sendFd, err := os.OpenFile(*PlumbFile, os.O_RDONLY, os.ModeNamedPipe)
 	if err != nil {
-		Log(err)
+		log.Println(err)
 	}
 	defer sendFd.Close()
 	for {
 		_, err := io.Copy(&jsonMsg, sendFd)
 		if err != nil {
-			Log(err)
+			log.Println(err)
 			continue
 		}
 		if jsonMsg.Len() > 0 {
@@ -210,7 +217,7 @@ func EvalRule(rule *Rule) {
 	for i := 0; i < len((*rule).Patterns) && (*rule).Value; i++ {
 		patternValue, err := EvalPattern(rule, i)
 		if err != nil {
-			Log(err)
+			log.Println(err)
 		}
 		(*rule).Value = (*rule).Value && patternValue
 	}
@@ -232,15 +239,6 @@ func LineType(line string) int {
 	return ERROR
 }
 
-func Log(e error) {
-	fd, err := os.OpenFile(*LogFile, os.O_WRONLY | os.O_APPEND, os.ModeAppend)
-	if err == nil {
-		msg := fmt.Sprintf("%s:  %s\n", time.Now(), e)
-		fd.WriteString(msg)
-		fd.Close()
-	}
-}
-
 func PlumbStart(command string, vars *Variables) {
 	// Use the shell, and shell options defined in rules,
 	// if they aren't defined, use the default ones.
@@ -253,24 +251,24 @@ func PlumbStart(command string, vars *Variables) {
 	cmd := exec.Command(shell, shellOpts, command)
 	err := cmd.Start()
 	if err != nil {
-		Log(err)
+		log.Println(err)
 	}
 }
 
 func PlumbTo(text string, fileName string) {
 	stat, err := os.Stat(fileName)
 	if err != nil {
-		Log(err)
+		log.Println(err)
 		return
 	}
 	mode := stat.Mode()
 	if !mode.IsRegular() {
-		Log(errors.New("Can't plumb to non regular file: " + fileName))
+		log.Println(errors.New("Can't plumb to non regular file: " + fileName))
 	}
 
 	fd, err := os.OpenFile(fileName, os.O_WRONLY | os.O_APPEND, os.ModeAppend)
 	if err != nil {
-		Log(err)
+		log.Println(err)
 	}
 	defer fd.Close()
 	fd.WriteString(text)
@@ -286,7 +284,7 @@ func ProcessMsg(jsonMsg []byte) {
 	// Unpack the json encoded message
 	err := json.Unmarshal(jsonMsg, &msg)
 	if err != nil {
-		Log(err)
+		log.Println(err)
 		return
 	}
 
@@ -298,7 +296,7 @@ func ProcessMsg(jsonMsg []byte) {
 
 	rulesFd, err := os.Open(*RulesFile)
 	if err != nil {
-		Log(err)
+		log.Println(err)
 		return
 	}
 	defer rulesFd.Close()
@@ -307,7 +305,7 @@ func ProcessMsg(jsonMsg []byte) {
 	for scanner.Scan() {
 		err := scanner.Err()
 		if err != nil {
-			Log(err)
+			log.Println(err)
 		}
 		line := strings.Trim(scanner.Text(), " \t")
 
@@ -316,13 +314,12 @@ func ProcessMsg(jsonMsg []byte) {
 			// Add the variable to the rule template
 			err := AffectVar(line, &ruleTemplate)
 			if err != nil {
-				Log(err)
+				log.Println(err)
 			}
 			ruleErr = true
 		case BLANK:
 			if capturing && !ruleErr && len(rule.Patterns) > 0 {
 				EvalRule(&rule)
-				fmt.Println(rule.Value)
 				if rule.Value {
 					return
 				}
@@ -342,7 +339,7 @@ func ProcessMsg(jsonMsg []byte) {
 			err := CookPattern(line, &pattern)
 			if err != nil {
 				ruleErr = true
-				Log(err)
+				log.Println(err)
 				break
 			}
 			rule.Patterns = append(rule.Patterns, pattern)
