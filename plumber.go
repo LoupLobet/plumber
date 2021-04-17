@@ -53,12 +53,17 @@ const DefaultShellOpts = "-c"
 var LogFile   = flag.String("l", "/mnt/plumb/log", "log file")
 var PlumbFile = flag.String("p", "/mnt/plumb/send", "plumb file")
 var RulesFile = flag.String("r", "/mnt/plumb/rules", "rules file")
+var DebugMode = flag.Bool("d", false, "debug mode")
 
 func main() {
 	var jsonMsg bytes.Buffer
 
 	flag.Parse()
 
+	// Select the log file.
+	if *DebugMode {
+		*LogFile = "/dev/stdout"
+	}
 	logFd, err := os.OpenFile(*LogFile, os.O_WRONLY | os.O_APPEND, os.ModeAppend)
 	if err != nil {
 		fmt.Printf("Plumber: Can't start: couldn't open the log file: %s\n", *LogFile)
@@ -71,6 +76,7 @@ func main() {
 		log.Println(err)
 	}
 	defer sendFd.Close()
+	// Listening loop.
 	for {
 		_, err := io.Copy(&jsonMsg, sendFd)
 		if err != nil {
@@ -256,22 +262,12 @@ func PlumbStart(command string, vars *Variables) {
 }
 
 func PlumbTo(text string, fileName string) {
-	stat, err := os.Stat(fileName)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	mode := stat.Mode()
-	if !mode.IsRegular() {
-		log.Println(errors.New("Can't plumb to non regular file: " + fileName))
-	}
-
-	fd, err := os.OpenFile(fileName, os.O_WRONLY | os.O_APPEND, os.ModeAppend)
+	fd, err := os.OpenFile(fileName, os.O_CREATE | os.O_APPEND | os.O_WRONLY, 0777)
 	if err != nil {
 		log.Println(err)
 	}
 	defer fd.Close()
-	fd.WriteString(text)
+	fd.WriteString(text + "\n")
 }
 
 func ProcessMsg(jsonMsg []byte) {
