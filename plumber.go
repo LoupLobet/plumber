@@ -11,9 +11,11 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -57,6 +59,10 @@ var DebugMode = flag.Bool("d", false, "debug mode")
 
 func main() {
 	var jsonMsg bytes.Buffer
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP, syscall.SIGKILL)
+	go HandleSignals(sigs)
 
 	flag.Parse()
 
@@ -229,6 +235,16 @@ func EvalRule(rule *Rule) {
 	}
 }
 
+func HandleSignals(sigs chan os.Signal) {
+	for s := range(sigs) {
+		switch s {
+		case syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT:
+			log.Printf("Exit on signal: %d\n", s)
+			os.Exit(1)
+		}
+	}
+}
+
 func LineType(line string) int {
 	if line == "\n" || line == "" {
 		return BLANK
@@ -258,6 +274,8 @@ func PlumbStart(command string, vars *Variables) {
 	err := cmd.Start()
 	if err != nil {
 		log.Println(err)
+	} else {
+		log.Printf("Plumb start %s\n", command)
 	}
 }
 
@@ -265,9 +283,11 @@ func PlumbTo(text string, fileName string) {
 	fd, err := os.OpenFile(fileName, os.O_CREATE | os.O_APPEND | os.O_WRONLY, 0777)
 	if err != nil {
 		log.Println(err)
+	} else {
+		defer fd.Close()
+		fd.WriteString(text + "\n")
+		log.Printf("Plumb to %s :\n%s\n", fileName, text)
 	}
-	defer fd.Close()
-	fd.WriteString(text + "\n")
 }
 
 func ProcessMsg(jsonMsg []byte) {
@@ -344,5 +364,9 @@ func ProcessMsg(jsonMsg []byte) {
 			ruleErr = true
 		}
 	}
+
+	// no valid rule in the whole rules file: print log message.
+	// If a rule value was true, the function return (cf case BLANK).
+	log.Println("Can't find valid rule for the message")
 }
 
