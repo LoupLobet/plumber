@@ -60,10 +60,6 @@ var DebugMode = flag.Bool("d", false, "debug mode")
 func main() {
 	var jsonMsg bytes.Buffer
 
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP, syscall.SIGKILL)
-	go HandleSignals(sigs)
-
 	flag.Parse()
 
 	// Select the log file.
@@ -77,11 +73,19 @@ func main() {
 	defer logFd.Close()
 	log.SetOutput(logFd)
 
+	log.Println("Plumber started")
+
+	// Handle sigs
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP, syscall.SIGKILL)
+	go HandleSignals(sigs)
+
 	sendFd, err := os.OpenFile(*PlumbFile, os.O_RDONLY, os.ModeNamedPipe)
 	if err != nil {
 		log.Println(err)
 	}
 	defer sendFd.Close()
+
 	// Listening loop.
 	for {
 		_, err := io.Copy(&jsonMsg, sendFd)
