@@ -28,7 +28,7 @@ data matches '([a-zA-Z0-9\/\-_\.@]+).(pdf|ps)'
 arg isfile $0
 plumb start zathura $file
 
-# plumb file to acme
+# plumb file to sam
 type is text
 data matches '.+'
 arg isfile $0
