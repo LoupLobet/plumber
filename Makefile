@@ -13,6 +13,9 @@ install: all
 	[ -e /mnt/plumb/rules ] || cp rules /mnt/plumb/rules
 	cp plumber /usr/local/bin/plumber
 	cp plumb /usr/local/bin/plumb
+	mkdir -p /usr/local/man/man1/
+	cp plumb.1 /usr/local/man/man1/plumb.1
+	cp plumber.1 /usr/local/man/man1/plumber.1
 
 uninstall:
 	rm -rf /mnt/plumb
