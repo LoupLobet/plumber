@@ -113,14 +113,17 @@ The plumber also maintains some built-in variables (those variables are reset be
 .B $0
 The text that matched the entire regular expression in a previous data matches pattern. $1, $2, ... refer to the text matching the first, second, ... parenthesized subexpression.
 .TP
+.B $arg
+The argument of the message (default is empty)
+.TP
 .B $data
 The contents of the data field of the message.
 .TP
 .B $dir
-The directory path resulting from a successful 'isdir' pattern. (default value is an empty).
+The directory path resulting from a successful 'isdir' pattern. (default is empty ).
 .TP
 .B $file
-The file path resulting from a successful 'isfile' pattern. (default value is an empty).
+The file path resulting from a successful 'isfile' pattern (default is empty).
 .TP
 .B $type
 The content of the type field of the message.
