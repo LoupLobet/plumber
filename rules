@@ -1,12 +1,12 @@
 # If SHELL and SHELL_OPTS aren't defined thr plumber will use the
 # default shell /bin/sh with the -c option.
-# SHELL=/bin/sh
-# SHELL_OPTS='-c'
+SHELL=/bin/sh
+SHELL_OPTS='-c'
 
-LastWin='acme/$(9p ls acme| grep \'^[[:digit:]]\' |sort -rn |sed 1q)'
+LastWin='acme/$(9p ls acme |sort -rn |sed 1q)'
 
 # urls
-tyype is text
+type is text
 data matches '(http|https|ftp|file|gopher|telnet)://[a-zA-Z0-9@\/\.\-_]+'
 plumb start surf $data
 
@@ -20,12 +20,18 @@ plumb start echo clean |9p write ${LastWin}/ctl
 type is text
 data matches '([a-zA-Z0-9\/\-_\.@]+).(png|PNG|jpe?g|JPE?G)'
 arg isfile $0
-plumb start feh $arg
+plumb start feh $file
 
-# documents
+# .pdf .ps
 type is text
 data matches '([a-zA-Z0-9\/\-_\.@]+).(pdf|ps)'
 arg isfile $0
-plumb start zathura $arg
+plumb start zathura $file
+
+# plumb file to acme
+type is text
+data matches '.+'
+arg isfile $0
+plumb start sam $file
 
 # A blank line expected after the last rule
