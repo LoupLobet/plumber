@@ -195,10 +195,13 @@ func EvalPattern(rule *Rule, i int) (bool, error) {
 				break
 			}
 			mode := stat.Mode()
-			if pattern.Verb == "isfile" && mode.IsRegular() ||
-			   pattern.Verb == "isdir" && mode.IsDir() {
+			if pattern.Verb == "isfile" && mode.IsRegular() {
 				patternValue = true
-				(*rule).Vars[pattern.Obj] = pattern.Arg
+				(*rule).Vars["file"] = pattern.Arg
+			}
+			pattern.Verb == "isdir" && mode.IsDir() {
+				patternValue = true
+				(*rule).Vars["dir"] = pattern.Arg
 			}
 		default:
 			err = errors.New("Inconsistent verb with object '" +
@@ -311,7 +314,7 @@ func ProcessMsg(jsonMsg []byte) {
 	// Create a rule template with message variables.
 	ruleTemplate.Vars = Variables {
 		"data": msg.Data, "dst": msg.Dst, "src": msg.Src,
-		"type": msg.Type, "wdir": msg.Wdir,
+		"type": msg.Type, "wdir": msg.Wdir, "dir": "", "file": "",
 	}
 
 	rulesFd, err := os.Open(*RulesFile)
