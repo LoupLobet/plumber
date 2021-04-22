@@ -1,0 +1,141 @@
+.TH PLUMB 1
+.SH NAME
+plumb \- format and send message to the plumber
+.SH SYNOPSIS
+.B plumb
+.RB [ \-i ]
+.RB [ \-d
+.IR destination ]
+.RB [ \-p
+.IR plumbfile ]
+.RB [ \-s
+.IR source ]
+.RB [ \-t
+.IR type ]
+.RB [ \-w
+.IR directory ]
+data ...
+.SH OPTIONS
+.TP
+.B \-i
+Read data on the standard input.
+.TP
+.B \-d destination
+Set the dst field of the message (default is empty).
+.TP
+.B  \-p plumbfile
+Specify a plumb file to write message (default is /mnt/plumb/send).
+.TP
+.B \-s source
+Set the src field of the message (default is plumb).
+.TP
+.B \- t type
+Set the type field of the message (default is text).
+.TP
+.B \-w type
+Set the wdir field of the message (default is the current working directory).
+.SH DESCRIPTION
+.B Message format:
+.br
+The role of plumb(1) is to format data and metadata into a message, that will be sent to a plumb file - constantly listened by plumber(1).
+The messages formed by plumb(1) are JSON encoded Go structures, composed of the following fields:
+.RS
+.TF Type
+.TP
+.B data
+The data given to plumb(1).
+.TP
+.B dst
+The destination program for the data.
+.TP
+.B src
+The source program of the message.
+.TP
+.B type
+Type of data (e.g. text, image, file ...).
+.TP
+.B wdir
+Working directory. The wdir field can be used by plumber(1) to try to build an absolute path if the data field is a file name.
+.RE
+
+Only the data field isn't optional, and plumb(1) will exit if the field in empty. Other fields are needed to build consistent rules, and they should be non-empty as possible, to proceed a good data discrimination.
+
+.B Plumbing rules:
+.br
+When the plumber (see plumber(1)) receives a message on its plumb file, it tries to decode the message from JSON to a Go structure. The message is compared to rules in the plumber rules file. This rules file is a set of blank separated rules, each rule is itself composed of patterns. A blank line terminates a rule. Each rules file's line is trimmed (i.e. leading/trailing whitespaces are removed), and lines beginning with a '#' are commentary, and are regarded as blank lines, but can't terminate a rule like a true blank line.
+
+note : Unlike Plan9's plumber, actions and patterns are considered the same way in documentation and code. Therefore, rules without actions are valid.
+
+When a message is received by the plumber, the rules are examined in order. For each rule, the pattern evaluation continues while the previous patterns are triggered (i.e. if the message matches the pattern). If the pattern is a 'plumb' statement, it is evaluated as a match, and the statement will be executed. If a whole rule is triggered, the rest are ignored. If none are triggered, nothing appends. In each case, a corresponding message is written to the log file.
+
+Patterns all consist of three components: an object, a verb, an argument. These are separated by whitespace and must be on the same line. The object and the verb must be written literally (no variable/macros substitution). The argument may contain quoted strings, variables and macros. After the two first whitespaces - which delimit the three pattern elements - other whitespaces don't have any particular meaning, and they are considered as part of the argument.
+
+The pattern object can be the name of a message field (e.g. data, type, wdir ...), the keyword 'arg' which refers to the arguments of the rule, or the keyword 'plumb'. Moreover, pattern objects are considered as variables in the scope of the rule, which implies that temporary modifications of the message field are allowed.
+
+The pattern verb describes the action between the object and the argument. The pattern value (i.e. if the pattern is triggered or not) depends on the verb. Some verbs can lead to an untriggered pattern, when others will always recognize the pattern as triggered (e.g. plumb or set). The verbs are described below:
+.RS
+.TF matches
+.TP
+.B is
+The pattern is recognized as triggered, if the object value is identical to the argument value.
+.TP
+.B isn't
+The pattern is recognized as triggered, if the object value is different from the argument value.
+.TP
+.B isdir
+The pattern is recognized as triggered, if the argument value is an absolute directory path; or if the concatenation of the wdir field, a '/' character, and the argument is an absolute directory path. If the pattern is triggered, the $dir variable is set to the directory path.
+.TP
+.B isfile
+The pattern is recognized as triggered, if the argument value is an absolute file path; or if the concatenation of the wdir field, a '/' character, and the argument is an absolute file path. If the pattern is triggered, the $file variable is set to the file path.
+.TP
+.B matches
+The pattern is recognized as triggered, if the entire text of the object matches the regular expression specified in the pattern argument. The regular expressions are in the Go syntax (see https://github.com/google/re2/wiki/Syntax). If the regular expression matches the object text, the variables $0, $1, ..., $n are set with the submatches of the regular expression (where submatches are delimited with a pair of '()' ).
+.TP
+.B set
+The value of the object is set to the value of the argument. The pattern is always recognized as triggered.
+.TP
+.B start
+The object must be 'plumb'. Run as another process, the argument value as a shell command, with the shell specified with the $SHELL and $SHELL_OPTS macros (if those macros aren't affected in the rules file the default shell and shell options are /bin/sh with the -c option. The return value or the status of the executed command are ignored by the plumber. The pattern is always recognized as triggered.
+.TP
+.B to
+The object must be 'plumb'. Write the content of the data field to the file specified in the argument. The plumber doesn't check the argument consistency as a file path. The pattern is always recognized as triggered.
+.RE
+
+The pattern argument is composed of raw text and/or variables and/or macros. Variable/macros substitution can be avoid by placing simple quotes around text. The backslash character escapes the next character, and allows to avoid variable substitution or simple quote escaping.
+
+.B Variables and macros:
+.br
+Macros and variables are identified by a leading '$' or enclosing '${...}'. Macros may be set, between rules, by assignment statements in the style of POSIX compliant shells (i.e. varname=value), and only one macro assignment may appear on a line. The scope of macros is the whole rules file, while the scope of variables is a single rule. Variables value can't be changed outside of a rule and without the appropriate verb (e.g. set, isdir ...).
+The plumber also maintains some built-in variables (those variables are reset between rules) :
+.RS
+.TF $data
+.TP
+.B $0
+The text that matched the entire regular expression in a previous data matches pattern. $1, $2, ... refer to the text matching the first, second, ... parenthesized subexpression.
+.TP
+.B $data
+The contents of the data field of the message.
+.TP
+.B $dir
+The directory path resulting from a successful 'isdir' pattern. (default value is an empty).
+.TP
+.B $file
+The file path resulting from a successful 'isfile' pattern. (default value is an empty).
+.TP
+.B $type
+The content of the type field of the message.
+.TP
+.B $src
+The content of the src field of the message.
+.TP
+.B $wdir
+The content of the wdir field of the message.
+.RE
+.SH FILES
+/mnt/plumb/log
+.br
+/mnt/plumb/rules
+.br
+/mnt/plumb/send
+.SH SEE ALSO
+mkfifo(1), plumber(1)

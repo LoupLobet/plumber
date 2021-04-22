@@ -1,0 +1,48 @@
+.TH PLUMBER 1
+.SH NAME
+plumber \- interprocess communication daemon
+.SH SYNOPSIS
+.B plumber
+.RB [ \-d ]
+.RB [ \-l
+.IR logfile ]
+.RB [ \-p
+.IR plumbfile ]
+.RB [ \-r
+.IR rulesfile ]
+.SH OPTIONS
+.TP
+.B \-d
+Starts the plumber in debug mode (i.e. logs will be written on stdout). Same as '-l /dev/stdout' (default disabled).
+.TP
+.B \-l logfile
+Writes logs to logfile (default is /mnt/plumb/log).
+.TP
+.B \-p plumbfile
+Specifies the plumb file - plumbfile must be a Unix FIFO pipe (default is /mnt/plumb/send).
+.TP
+.B \-r rulesfile
+Specifies the rules file (default is /mnt/plumb/rules).
+.SH DESCRIPTION
+The plumber is an interprocess communication daemon, that receives messages from plumb(1), examines them through user-written rules, and redirects data to other processes.
+
+The plumber works in collaboration with three files: send, rules and log. By default, these files are created in /mnt/plumb during the installation process, and their location can be changed using the plumber options (cf. SYNOPSIS).
+
+The send file is a Unix FIFO pipe that receives messages intended for the plumber from plumb(1). These messages are JSON encoded Go structures. The rules file is a regular file that contains plumbing rules in a format described in plumb(1). The log file is the default file where plumber logs are written.
+
+When a message is written to the send pipe, the plumber tries to decode it. If this process fails, nothing appends and an error message is written to the log file. If the message was successfully decoded, the plumber compares the message to the rules written in the rules file. If a rule comparison succeeds, the rule 'plumb' statements are executed, and the rules evaluation process ends. Those plumb statements consist of a shell command, or a destination file where the message data will be sent.
+.br
+If the rule comparison fails, the plumber tries with the next rule and so on. If no rule comparison succeeds in the whole rules file, nothing appends.
+.SH PECULIARITIES
+This plumber was made as an alternative to the Plan9 plumber, adpated to modern Unix-based operating systems. It works without 9p(1), 9pserver(4), 9pclient(3) or any other Plan9 utils/concepts. Therefore, this plumber isn't network transparent - because of a pipe-based communication process.
+Because ports - edit, web, showmail, etc. - aren't a part of Unix-based systems, the message attributes don't have any sense - and aren't implemented. Therefore, the 'plumb to' statement loses in interest, but still allows the plumber to write text to a file.
+
+In the rules syntax, the 'include' statement doesn't exist - maybe in a future update.
+.SH FILES
+/mnt/plumb/log
+.br
+/mnt/plumb/rules
+.br
+/mnt/plumb/send
+.SH SEE ALSO
+	mkfifo(1),  plumb(1)
