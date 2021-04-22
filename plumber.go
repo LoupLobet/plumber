@@ -199,7 +199,7 @@ func EvalPattern(rule *Rule, i int) (bool, error) {
 				patternValue = true
 				(*rule).Vars["file"] = pattern.Arg
 			}
-			pattern.Verb == "isdir" && mode.IsDir() {
+			if pattern.Verb == "isdir" && mode.IsDir() {
 				patternValue = true
 				(*rule).Vars["dir"] = pattern.Arg
 			}
