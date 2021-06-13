@@ -1,5 +1,6 @@
-`# make install`
+`$ make`
 
+`# make install`
 
 `$ man plumber`
 
